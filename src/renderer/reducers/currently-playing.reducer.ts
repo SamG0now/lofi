@@ -1,4 +1,4 @@
-import { SpotifyCurrentlyPlaying, SpotifyUserProfile } from '../api/spotify-api';
+import { RepeatState, SpotifyCurrentlyPlaying, SpotifyUserProfile } from '../api/spotify-api';
 
 export enum CurrentlyPlayingType {
   Unknown = 'unknown',
@@ -9,28 +9,34 @@ export enum CurrentlyPlayingType {
 
 export interface CurrentlyPlaying {
   id: string;
+  uri: string;
   type: CurrentlyPlayingType;
   track: string;
   artist: string;
+  album: string;
   progress: number;
   duration: number;
   isPlaying: boolean;
   cover: string;
   volume: number;
+  repeatState: RepeatState;
   isLiked: boolean;
   userProfile: SpotifyUserProfile | null;
 }
 
 export const INITIAL_STATE: CurrentlyPlaying = {
   id: '',
+  uri: '',
   type: CurrentlyPlayingType.Unknown,
   track: '',
   artist: '',
+  album: '',
   progress: 0,
   duration: 0,
   isPlaying: false,
   cover: '',
   volume: 0,
+  repeatState: RepeatState.Off,
   isLiked: false,
   userProfile: null,
 };
@@ -64,29 +70,31 @@ export const useCurrentlyPlayingReducer = (
       if (!action.payload) {
         return state;
       }
-      const {
-        item,
-        progress_ms: progress,
-        is_playing: isPlaying,
-        device: { volume_percent: volumePercent },
-      } = action.payload;
+      const { item, progress_ms: progress, is_playing: isPlaying, device, repeat_state: repeatState } = action.payload;
       if (!item) {
         return state;
       }
-      const { album, artists, description, duration_ms: durationMs, id, images, name, type } = item;
-      return {
+      const { album, artists, description, duration_ms: durationMs, id, images, name, show, type, uri } = item;
+      const next: CurrentlyPlaying = {
         ...state,
         id,
+        uri,
         type: type as CurrentlyPlayingType,
         track: name,
-        artist: artists?.map(({ name: artistName }) => artistName).join(', ') || description,
+        // podcast episodes have a show instead of artists and an album
+        artist: artists?.map(({ name: artistName }) => artistName).join(', ') || show?.name || description,
+        album: album?.name ?? '',
         progress,
         duration: durationMs,
         isPlaying,
         // eslint-disable-next-line no-nested-ternary
-        cover: album?.images?.length > 0 ? album.images[0].url : images.length > 0 ? images[0].url : '',
-        volume: volumePercent,
+        cover: album?.images?.length > 0 ? album.images[0].url : images?.length > 0 ? images[0].url : '',
+        volume: device?.volume_percent ?? state.volume,
+        repeatState: repeatState ?? state.repeatState,
       };
+      // it's polled every second or so: while paused nothing changes, and nothing has to be drawn again
+      const isUnchanged = (Object.keys(next) as (keyof CurrentlyPlaying)[]).every((key) => next[key] === state[key]);
+      return isUnchanged ? state : next;
     }
 
     case CurrentlyPlayingActions.SetUserProfile: {

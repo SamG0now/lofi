@@ -3,16 +3,19 @@ import '../../icon.ico';
 import '../../icon.png';
 import '../../icon_liked.png';
 
+import { spawn } from 'child_process';
 import {
   app,
   BrowserWindow,
   BrowserWindowConstructorOptions,
   HandlerDetails,
   ipcMain,
+  IpcMainEvent,
   Menu,
   nativeImage,
   Rectangle,
   screen,
+  session,
   shell,
   Tray,
 } from 'electron';
@@ -20,36 +23,46 @@ import Store from 'electron-store';
 import * as path from 'path';
 
 import { version } from '../../version.generated';
-import {
-  ApplicationUrl,
-  IpcMessage,
-  MACOS,
-  MAX_SIDE_LENGTH,
-  MIN_SIDE_LENGTH,
-  WindowName,
-  WindowTitle,
-} from '../constants';
+import { ApplicationUrl, IpcMessage, LINUX, MACOS, MAX_SIDE_LENGTH, MIN_SIDE_LENGTH, WindowName } from '../constants';
 import { MouseData } from '../models/ipc-messages.models';
-import { DEFAULT_SETTINGS, Settings } from '../models/settings';
+import { DEFAULT_SETTINGS, Settings, VisualizationType } from '../models/settings';
 import {
-  checkIfAppIsOnLeftSide,
-  findWindow,
   getAboutWindowOptions,
-  getFullscreenVisualizationWindowOptions,
-  getFullscreenVizBounds,
+  getOnboardingWindowOptions,
   getSettingsWindowOptions,
-  getTrackInfoWindowOptions,
-  moveTrackInfo,
   setAlwaysOnTop,
   settingsSchema,
   showDevTool,
 } from './main.utils';
 
-const DEFAULT_SIZE = 150;
+const DEFAULT_SIZE = 220;
+// Linux doesn't emit 'resized', consider a resize finished once no 'resize' happened for that long
+const RESIZE_SETTLE_DELAY_IN_MS = 300;
 
 app.commandLine.appendSwitch('disable-gpu-vsync');
 app.commandLine.appendArgument('disable-gpu-vsync');
 app.commandLine.appendSwitch('enable-transparent-visuals');
+
+// Starts another Lofi, for this one to quit and hand over to. Not app.relaunch() on Linux: its helper runs from an
+// AppImage's mount point, which disappears once this process exits
+const launchAgain = (args: string[]): void => {
+  if (LINUX) {
+    spawn(process.env.APPIMAGE || process.execPath, args, { detached: true, stdio: 'inherit' }).unref();
+  } else {
+    app.relaunch({ args });
+  }
+};
+
+// Native Wayland windows can't position themselves, follow the cursor or stay on top, run through XWayland.
+// The platform is picked before this script runs, so it must be on the command line: the launch scripts and
+// desktop entry pass it, anything else (e.g. starting the AppImage directly) gets relaunched with it.
+const isNativeWayland = app.commandLine.getSwitchValue('ozone-platform') === 'wayland';
+const isPlatformRequested = process.argv.some((arg) => arg.startsWith('--ozone-platform'));
+const isRelaunchingWithX11 = LINUX && isNativeWayland && !isPlatformRequested && !!process.env.DISPLAY;
+if (isRelaunchingWithX11) {
+  launchAgain([...process.argv.slice(1), '--ozone-platform=x11']);
+  app.exit(0);
+}
 
 if (process.env.NODE_ENV === 'development') {
   app.commandLine.appendSwitch('trace-warnings');
@@ -58,7 +71,32 @@ if (process.env.NODE_ENV === 'development') {
 
 Store.initRenderer();
 const store = new Store({ clearInvalidConfig: true });
-const storeSettings = store.get('settings') as Settings;
+const storeSettings = store.get('settings') as Settings & { size?: number; visualizationScreenId?: number };
+
+// The player used to be square with a single size, it now has a width and a height
+if (storeSettings && storeSettings.width === undefined && typeof storeSettings.size === 'number') {
+  storeSettings.width = storeSettings.size;
+  storeSettings.height = storeSettings.size;
+  delete storeSettings.size;
+  store.set('settings', storeSettings);
+}
+
+// The fullscreen visualization (2) is gone, it shows over the cover instead
+const FULLSCREEN_VISUALIZATION = 2;
+if (storeSettings && (storeSettings.visualizationType as number) === FULLSCREEN_VISUALIZATION) {
+  storeSettings.visualizationType = VisualizationType.Small;
+  store.set('settings', storeSettings);
+}
+if (storeSettings && 'visualizationScreenId' in storeSettings) {
+  delete storeSettings.visualizationScreenId;
+  store.set('settings', storeSettings);
+}
+
+// Installs from before the setup guide only get it when they were never connected to Spotify
+if (storeSettings && storeSettings.isOnboarded === undefined) {
+  storeSettings.isOnboarded = !!storeSettings.spotifyClientId;
+  store.set('settings', storeSettings);
+}
 
 let settings: Settings = DEFAULT_SETTINGS;
 try {
@@ -69,14 +107,23 @@ try {
   console.error(`Invalid settings file: ${error}`);
 }
 
+if (settings.isUsingHardwareAcceleration === false) {
+  app.disableHardwareAcceleration();
+}
+
 let mainWindow: BrowserWindow | null = null;
 let mousePoller: NodeJS.Timeout;
+let resizeTimeoutId: NodeJS.Timeout;
 let initialBounds: Rectangle;
+// where the player is being dragged to, the settings are told once it's let go of
+let movedTo: Pick<Rectangle, 'x' | 'y'> | null = null;
+let isAlwaysSquare = !!settings.isAlwaysSquare;
 
 let tray: Tray = null;
 Menu.setApplicationMenu(null);
 
-const isSingleInstance: boolean = app.requestSingleInstanceLock();
+// leave the lock to the relaunched instance
+const isSingleInstance: boolean = isRelaunchingWithX11 || app.requestSingleInstanceLock();
 if (!isSingleInstance) {
   app.quit();
 }
@@ -87,8 +134,8 @@ const iconTrackLiked = nativeImage.createFromPath(`${__dirname}/icon_liked.png`)
 const MAIN_WINDOW_OPTIONS: BrowserWindowConstructorOptions = {
   x: settings?.x ?? -1,
   y: settings?.y ?? -1,
-  height: settings.size ?? DEFAULT_SIZE,
-  width: settings.size ?? DEFAULT_SIZE,
+  height: settings.height ?? DEFAULT_SIZE,
+  width: settings.width ?? DEFAULT_SIZE,
   minHeight: MIN_SIDE_LENGTH,
   minWidth: MIN_SIDE_LENGTH,
   maxHeight: MAX_SIDE_LENGTH,
@@ -106,9 +153,13 @@ const MAIN_WINDOW_OPTIONS: BrowserWindowConstructorOptions = {
   webPreferences: {
     nodeIntegration: true,
     contextIsolation: false,
+    // nothing to type but a Spotify client ID, the spellchecker would only download and load its dictionaries
+    spellcheck: false,
   },
   backgroundColor: 'rgba(0,0,0,0)',
   roundedCorners: false,
+  // Windows and macOS use the executable's icon
+  ...(LINUX && { icon: path.join(__dirname, 'icon.png') }),
 };
 
 const createMainWindow = (): void => {
@@ -120,7 +171,7 @@ const createMainWindow = (): void => {
 
   showDevTool(mainWindow, !!settings?.isDebug);
 
-  ipcMain.on(IpcMessage.WindowMoving, (_: Event, { mouseX, mouseY }: MouseData) => {
+  ipcMain.on(IpcMessage.WindowMoving, (_: IpcMainEvent, { mouseX, mouseY }: MouseData) => {
     const { x, y } = screen.getCursorScreenPoint();
 
     const bounds: Partial<Rectangle> = {
@@ -141,54 +192,58 @@ const createMainWindow = (): void => {
     // Use setBounds instead of setPosition
     // See: https://github.com/electron/electron/issues/9477#issuecomment-406833003
     mainWindow.setBounds(bounds);
-    moveTrackInfo(mainWindow, screen);
-
-    mainWindow.webContents.send(IpcMessage.WindowMoved, bounds);
+    movedTo = { x: bounds.x, y: bounds.y };
   });
 
-  ipcMain.on(IpcMessage.WindowMoved, (_: Event) => {
+  // Every frame of the drag, the player would be drawn again and its settings written to disk
+  ipcMain.on(IpcMessage.WindowMoved, (_: IpcMainEvent) => {
     initialBounds = null;
+    if (movedTo) {
+      mainWindow.webContents.send(IpcMessage.WindowMoved, movedTo);
+      movedTo = null;
+    }
   });
 
-  ipcMain.on(IpcMessage.ScreenSize, (_: Event) => {
-    const bounds = mainWindow.getBounds();
-    const { bounds: displayBounds } = screen.getDisplayMatching(bounds);
+  // the window manager keeps a square player square while it's resized
+  mainWindow.setAspectRatio(isAlwaysSquare ? 1 : 0);
+  let [lastWidth] = mainWindow.getSize();
 
-    mainWindow.webContents.send(IpcMessage.ScreenSize, {
-      height: displayBounds.height,
-      width: displayBounds.width,
-    });
-  });
+  const handleResized = (): void => {
+    let [width, height] = mainWindow.getSize();
+    // in case the window manager ignored the aspect ratio, the side that was dragged decides
+    if (isAlwaysSquare && width !== height) {
+      const side = width !== lastWidth ? width : height;
+      mainWindow.setSize(side, side);
+      [width, height] = [side, side];
+    }
+    lastWidth = width;
+    mainWindow.webContents.send(IpcMessage.WindowResized, { width, height });
+  };
 
   mainWindow.on('resize', () => {
-    moveTrackInfo(mainWindow, screen);
+    if (LINUX) {
+      clearTimeout(resizeTimeoutId);
+      resizeTimeoutId = setTimeout(handleResized, RESIZE_SETTLE_DELAY_IN_MS);
+    }
   });
 
-  mainWindow.on('resized', () => {
-    const size = mainWindow.getSize();
-    const [width, height] = size;
-    const newSize = Math.min(width, height);
-    mainWindow.setSize(newSize, newSize, true);
-    mainWindow.webContents.send(IpcMessage.WindowResized, newSize);
-  });
+  mainWindow.on('resized', handleResized);
 
   ipcMain.on(
     IpcMessage.SettingsChanged,
-    (_: Event, { x, y, size, isAlwaysOnTop, isDebug, isVisibleInTaskbar, visualizationScreenId }: Settings) => {
+    (
+      _: IpcMainEvent,
+      { x, y, width, height, isAlwaysOnTop, isDebug, isVisibleInTaskbar, isAlwaysSquare: isSquare }: Settings
+    ) => {
       setAlwaysOnTop({ window: mainWindow, isAlwaysOnTop });
       mainWindow.setSkipTaskbar(!isVisibleInTaskbar);
       showDevTool(mainWindow, isDebug);
 
-      mainWindow.setBounds({ x, y, height: size, width: size });
+      isAlwaysSquare = !!isSquare;
+      mainWindow.setAspectRatio(isAlwaysSquare ? 1 : 0);
+      mainWindow.setBounds({ x, y, width, height });
       if (x === -1 && y === -1) {
         mainWindow.center();
-      }
-      moveTrackInfo(mainWindow, screen);
-
-      const fullscreenVizWindow = findWindow(WindowTitle.FullscreenViz);
-      if (fullscreenVizWindow) {
-        const fullscreenVizBounds = getFullscreenVizBounds(mainWindow.getBounds(), screen, visualizationScreenId);
-        fullscreenVizWindow.setBounds(fullscreenVizBounds);
       }
     }
   );
@@ -198,7 +253,7 @@ const createMainWindow = (): void => {
     app.quit();
   });
 
-  ipcMain.on(IpcMessage.OpenLink, (_: Event, url: ApplicationUrl) => {
+  ipcMain.on(IpcMessage.OpenLink, (_: IpcMainEvent, url: ApplicationUrl) => {
     if (!Object.values(ApplicationUrl).includes(url)) {
       // eslint-disable-next-line no-console
       console.error(`Invalid url ${url}`);
@@ -207,19 +262,36 @@ const createMainWindow = (): void => {
     shell.openExternal(url);
   });
 
-  ipcMain.on(IpcMessage.ShowAbout, (_: Event) => {
+  ipcMain.on(IpcMessage.ShowAbout, (_: IpcMainEvent) => {
     mainWindow.webContents.send(IpcMessage.ShowAbout);
   });
 
-  ipcMain.on(IpcMessage.ShowFullscreenVizualizer, (_: Event) => {
-    mainWindow.webContents.send(IpcMessage.ShowFullscreenVizualizer);
-  });
-
-  ipcMain.on(IpcMessage.ShowSettings, (_: Event) => {
+  ipcMain.on(IpcMessage.ShowSettings, (_: IpcMainEvent) => {
     mainWindow.webContents.send(IpcMessage.ShowSettings);
   });
 
-  ipcMain.on(IpcMessage.TrackLiked, (_: Event, isTrackLiked: boolean) => {
+  ipcMain.on(IpcMessage.ShowOnboarding, (_: IpcMainEvent) => {
+    mainWindow.webContents.send(IpcMessage.ShowOnboarding);
+  });
+
+  // Erases everything Lofi keeps, its settings and whatever its windows stored, then starts it like a new install
+  ipcMain.on(IpcMessage.FactoryReset, async (_: IpcMainEvent) => {
+    clearTimeout(mousePoller);
+    try {
+      await session.defaultSession.clearStorageData();
+      await session.defaultSession.clearCache();
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error(`Could not clear the stored data: ${error}`);
+    }
+    // last, so nothing the windows save in the meantime comes back
+    store.clear();
+    app.releaseSingleInstanceLock();
+    launchAgain(process.argv.slice(1));
+    app.exit(0);
+  });
+
+  ipcMain.on(IpcMessage.TrackLiked, (_: IpcMainEvent, isTrackLiked: boolean) => {
     if (tray) {
       tray.setImage(isTrackLiked ? iconTrackLiked : icon);
     }
@@ -236,18 +308,6 @@ const createMainWindow = (): void => {
         };
       }
 
-      case WindowName.FullscreenViz: {
-        const fullscreenVizBounds = getFullscreenVizBounds(
-          mainWindow.getBounds(),
-          screen,
-          settings.visualizationScreenId
-        );
-        return {
-          action: 'allow',
-          overrideBrowserWindowOptions: getFullscreenVisualizationWindowOptions(fullscreenVizBounds),
-        };
-      }
-
       case WindowName.Settings: {
         return {
           action: 'allow',
@@ -255,10 +315,10 @@ const createMainWindow = (): void => {
         };
       }
 
-      case WindowName.TrackInfo: {
+      case WindowName.Onboarding: {
         return {
           action: 'allow',
-          overrideBrowserWindowOptions: getTrackInfoWindowOptions(mainWindow, settings.isAlwaysOnTop),
+          overrideBrowserWindowOptions: getOnboardingWindowOptions(),
         };
       }
 
@@ -285,26 +345,6 @@ const createMainWindow = (): void => {
         break;
       }
 
-      case WindowName.FullscreenViz: {
-        childWindow.setAlwaysOnTop(true, 'pop-up-menu');
-        childWindow.setIgnoreMouseEvents(true);
-        const sourceId = childWindow.getMediaSourceId();
-        mainWindow.moveAbove(sourceId);
-
-        childWindow.on('focus', () => {
-          setAlwaysOnTop({ window: mainWindow, isAlwaysOnTop: true });
-        });
-
-        childWindow.on('blur', () => {
-          setAlwaysOnTop({ window: mainWindow, isAlwaysOnTop: true });
-        });
-
-        childWindow.on('close', () => {
-          setAlwaysOnTop({ window: mainWindow, isAlwaysOnTop: settings.isAlwaysOnTop });
-        });
-        break;
-      }
-
       case WindowName.Settings: {
         childWindow.webContents.setWindowOpenHandler(windowOpenHandler);
         if (MACOS) {
@@ -314,13 +354,14 @@ const createMainWindow = (): void => {
         break;
       }
 
-      case WindowName.TrackInfo: {
-        moveTrackInfo(mainWindow, screen);
-        childWindow.setIgnoreMouseEvents(true);
-        setAlwaysOnTop({ window: childWindow, isAlwaysOnTop: settings.isAlwaysOnTop });
+      case WindowName.Onboarding: {
+        childWindow.webContents.setWindowOpenHandler(windowOpenHandler);
         if (MACOS) {
           childWindow.setWindowButtonVisibility(false);
         }
+        // as high as the player, which it's opened after, so it's over it
+        setAlwaysOnTop({ window: childWindow, isAlwaysOnTop: true });
+        childWindow.center();
         break;
       }
 
@@ -337,8 +378,11 @@ const createMainWindow = (): void => {
 
 app.on('ready', () => {
   if (settings?.version === null || settings.version !== String(version)) {
+    // Settings from other versions are discarded, except for the user's own Spotify app and the setup being done
+    const { spotifyClientId = '', isOnboarded = false } = settings ?? DEFAULT_SETTINGS;
     store.clear();
-    settings = store.get('settings') as Settings;
+    settings = { ...DEFAULT_SETTINGS, spotifyClientId, isOnboarded };
+    store.set('settings', settings);
   }
 
   createMainWindow();
@@ -392,11 +436,7 @@ app.on('ready', () => {
 
     setAlwaysOnTop({ window: mainWindow, isAlwaysOnTop: settings.isAlwaysOnTop });
 
-    const bounds = mainWindow.getBounds();
-    const currentDisplay = screen.getDisplayMatching(bounds);
-    const isOnLeft = checkIfAppIsOnLeftSide(currentDisplay, bounds.x, bounds.width);
-    mainWindow.webContents.send(IpcMessage.WindowReady, { isOnLeft, displays });
-    moveTrackInfo(mainWindow, screen);
+    mainWindow.webContents.send(IpcMessage.WindowReady);
   });
 });
 

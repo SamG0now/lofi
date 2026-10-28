@@ -1,7 +1,6 @@
 import React, { FunctionComponent } from 'react';
 import styled from 'styled-components';
 
-import { VisualizationType } from '../../../models/settings';
 import { LoginButton } from '../../components';
 import wavesImage from '../../static/waves.gif';
 import Menu from '../cover/menu';
@@ -50,7 +49,7 @@ const WelcomeControls = styled.div`
 
 export const Welcome: FunctionComponent = () => (
   <div className="full">
-    <Menu isWelcome visualizationType={VisualizationType.None} />
+    <Menu />
     <WelcomeContent className="welcome-content centered draggable">
       <Brand className="brand draggable">
         lo

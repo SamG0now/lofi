@@ -1,14 +1,19 @@
-import React, { FunctionComponent, useMemo } from 'react';
+import { ipcRenderer } from 'electron';
+import React, { FunctionComponent, useCallback } from 'react';
 import styled from 'styled-components';
 
-import { getAuthUrl, startAuthServer } from '../../main/auth';
+import { IpcMessage, WindowName } from '../../constants';
+import { getAuthUrl, setClientId, startAuthServer } from '../../main/auth';
+import { useSettings } from '../contexts/settings.context';
 
-const Link = styled.a`
+const Button = styled.button`
   margin: auto;
   background-color: black;
   padding: 1rem;
   color: white;
-  text-decoration: none;
+  border: 1px solid transparent;
+  font: inherit;
+  cursor: pointer;
   transition: transform 0.2s;
   vertical-align: middle;
   font-size: 12px;
@@ -33,12 +38,32 @@ const SpotifyLogo = styled.i`
   margin-right: 0.5rem;
 `;
 
+// Opens Spotify's login page in the browser, the auth server then receives the redirect
+export const logIn = (clientId: string): void => {
+  setClientId(clientId);
+  startAuthServer();
+  window.open(getAuthUrl(), WindowName.Auth);
+};
+
 export const LoginButton: FunctionComponent = () => {
-  const authUrl = useMemo(getAuthUrl, []);
+  const {
+    state: { spotifyClientId },
+  } = useSettings();
+
+  const handleClick = useCallback(() => {
+    // Logging in requires a Spotify app of your own, the setup guide walks through making one
+    if (!spotifyClientId) {
+      ipcRenderer.send(IpcMessage.ShowOnboarding);
+      return;
+    }
+
+    logIn(spotifyClientId);
+  }, [spotifyClientId]);
+
   return (
-    <Link className="login-btn" target="auth" href={authUrl} onClick={startAuthServer}>
+    <Button type="button" className="login-btn" onClick={handleClick}>
       <SpotifyLogo className="fab fa-spotify" />
-      <span>Log in</span>
-    </Link>
+      <span>{spotifyClientId ? 'Log in' : 'Set up'}</span>
+    </Button>
   );
 };

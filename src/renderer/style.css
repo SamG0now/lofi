@@ -45,6 +45,11 @@ body {
   cursor: pointer;
 }
 
+button:focus,
+button:focus-visible {
+  outline: none;
+}
+
 .app {
   margin: auto;
   display: flex;

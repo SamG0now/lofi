@@ -11,6 +11,7 @@
     "allowUnusedLabels": false,
     "noUnusedLocals": true,
     "sourceMap": true,
+    "skipLibCheck": true,
     "target": "ES2021",
     "types": ["node", "lodash", "electron"]
   },

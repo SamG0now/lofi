@@ -5,10 +5,10 @@ export enum SettingsActionType {
   SetVisualization = 'setVisualization',
   SetVisualizationType = 'setVisualizationType',
   SetWindowPos = 'setWindowPos',
-  SetIsOnLeft = 'setIsOnLeft',
-  SetSize = 'setSize',
+  SetWindowSize = 'setWindowSize',
   SetTokens = 'setTokens',
   ResetTokens = 'resetTokens',
+  SetOnboarded = 'setOnboarded',
   UpdateSettings = 'updateSettings',
 }
 
@@ -26,12 +26,8 @@ export type SettingsAction =
       payload: { x: number; y: number };
     }
   | {
-      type: SettingsActionType.SetIsOnLeft;
-      payload: boolean;
-    }
-  | {
-      type: SettingsActionType.SetSize;
-      payload: number;
+      type: SettingsActionType.SetWindowSize;
+      payload: { width: number; height: number };
     }
   | {
       type: SettingsActionType.SetTokens;
@@ -39,6 +35,9 @@ export type SettingsAction =
     }
   | {
       type: SettingsActionType.ResetTokens;
+    }
+  | {
+      type: SettingsActionType.SetOnboarded;
     }
   | {
       type: SettingsActionType.UpdateSettings;
@@ -69,17 +68,11 @@ export const useSettingsReducer = (state: Settings, action: SettingsAction): Set
       };
     }
 
-    case SettingsActionType.SetSize: {
+    case SettingsActionType.SetWindowSize: {
       return {
         ...state,
-        size: action.payload,
-      };
-    }
-
-    case SettingsActionType.SetIsOnLeft: {
-      return {
-        ...state,
-        isOnLeft: action.payload,
+        width: action.payload.width,
+        height: action.payload.height,
       };
     }
 
@@ -97,6 +90,10 @@ export const useSettingsReducer = (state: Settings, action: SettingsAction): Set
         accessToken: '',
         refreshToken: '',
       };
+    }
+
+    case SettingsActionType.SetOnboarded: {
+      return state.isOnboarded ? state : { ...state, isOnboarded: true };
     }
 
     case SettingsActionType.UpdateSettings: {

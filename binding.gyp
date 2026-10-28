@@ -32,6 +32,17 @@
                 ],
             },
           }
+        ],
+        ['OS=="linux"',
+          {
+            # PulseAudio client library, also provided by PipeWire setups (pipewire-pulse)
+            'cflags_cc': [
+              '<!@(pkg-config --cflags libpulse-simple)'
+            ],
+            'libraries': [
+              '<!@(pkg-config --libs libpulse-simple)'
+            ],
+          }
         ]
       ]
     },

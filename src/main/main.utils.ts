@@ -1,14 +1,13 @@
-import { BrowserWindow, BrowserWindowConstructorOptions, Display, Rectangle, Screen } from 'electron';
+import { BrowserWindow, BrowserWindowConstructorOptions } from 'electron';
 import { z } from 'zod';
 
 import {
-  IpcMessage,
   MAX_BAR_THICKNESS,
+  MAX_EDGE_HAZE,
   MAX_SIDE_LENGTH,
   MAX_SKIP_SONG_DELAY,
   MIN_SIDE_LENGTH,
   MIN_SKIP_SONG_DELAY,
-  TRACK_INFO_GAP,
   WindowTitle,
 } from '../constants';
 import { VisualizationType } from '../models/settings';
@@ -25,15 +24,34 @@ export const getCommonWindowOptions = (): BrowserWindowConstructorOptions => ({
   alwaysOnTop: true,
   fullscreenable: false,
   center: true,
+  webPreferences: {
+    // Child windows are rendered by the main window through portals, they must share its (unsandboxed) process
+    sandbox: false,
+    spellcheck: false,
+  },
 });
 
+// room for the Design section's editor: the player and its inspector side by side. A window like any other, other
+// windows can go over it while it stays open.
 export const getSettingsWindowOptions = (): BrowserWindowConstructorOptions => ({
   ...getCommonWindowOptions(),
-  height: 420,
-  minHeight: 420,
-  width: 420,
-  minWidth: 420,
+  alwaysOnTop: false,
+  height: 740,
+  minHeight: 600,
+  width: 1080,
+  minWidth: 920,
+  roundedCorners: true,
   title: WindowTitle.Settings,
+});
+
+// A setup assistant: one size, above the player, which starts out in the middle of the screen too
+export const getOnboardingWindowOptions = (): BrowserWindowConstructorOptions => ({
+  ...getCommonWindowOptions(),
+  height: 620,
+  width: 820,
+  resizable: false,
+  roundedCorners: true,
+  title: WindowTitle.Onboarding,
 });
 
 export const getAboutWindowOptions = (): BrowserWindowConstructorOptions => ({
@@ -43,37 +61,6 @@ export const getAboutWindowOptions = (): BrowserWindowConstructorOptions => ({
   title: WindowTitle.About,
 });
 
-export const getFullscreenVisualizationWindowOptions = (displayBounds: Rectangle): BrowserWindowConstructorOptions => ({
-  ...getCommonWindowOptions(),
-  height: displayBounds.height,
-  width: displayBounds.width,
-  x: displayBounds.x,
-  y: displayBounds.y,
-  fullscreen: true,
-  skipTaskbar: true,
-  title: WindowTitle.FullscreenViz,
-});
-
-export const getTrackInfoWindowOptions = (
-  mainWindow: BrowserWindow,
-  isAlwaysOnTop: boolean
-): BrowserWindowConstructorOptions => {
-  const { x, y, width } = mainWindow.getBounds();
-  return {
-    ...getCommonWindowOptions(),
-    parent: mainWindow,
-    skipTaskbar: true,
-    alwaysOnTop: isAlwaysOnTop,
-    height: 200,
-    width: 400,
-    transparent: true,
-    center: false,
-    x: x + width + TRACK_INFO_GAP.X,
-    y: y + TRACK_INFO_GAP.Y,
-    title: WindowTitle.TrackInfo,
-  };
-};
-
 export const showDevTool = (window: BrowserWindow, isShow: boolean): void => {
   if (isShow) {
     window.webContents.openDevTools({ mode: 'detach' });
@@ -81,9 +68,6 @@ export const showDevTool = (window: BrowserWindow, isShow: boolean): void => {
     window.webContents.closeDevTools();
   }
 };
-
-export const checkIfAppIsOnLeftSide = (display: Display, x: number, appWidth: number): boolean =>
-  display.bounds.x + display.bounds.width / 2 > x + appWidth / 2;
 
 export const setAlwaysOnTop = ({
   window,
@@ -104,30 +88,6 @@ export const setAlwaysOnTop = ({
   relativeLevel?: number;
 }): void => window && window.setAlwaysOnTop(isAlwaysOnTop, level);
 
-export const findWindow = (name: string): BrowserWindow | undefined =>
-  BrowserWindow.getAllWindows().find(({ title }) => title === name);
-
-export const moveTrackInfo = (mainWindow: BrowserWindow, screen: Screen): void => {
-  const { x, y, width } = mainWindow.getBounds();
-  const trackInfoWindow = findWindow(WindowTitle.TrackInfo);
-  if (!trackInfoWindow) {
-    return;
-  }
-
-  const currentDisplay = screen.getDisplayNearestPoint({ x, y });
-  const isOnLeft = checkIfAppIsOnLeftSide(currentDisplay, x, width);
-
-  const originalBounds = trackInfoWindow.getBounds();
-  const newBounds = {
-    ...originalBounds,
-    x: isOnLeft ? x + width + TRACK_INFO_GAP.X : x - originalBounds.width - TRACK_INFO_GAP.X,
-    y: y + TRACK_INFO_GAP.Y,
-  };
-
-  trackInfoWindow.setBounds(newBounds);
-  mainWindow.webContents.send(IpcMessage.SideChanged, { isOnLeft });
-};
-
 export const settingsSchema = z.object({
   x: z.number(),
   y: z.number(),
@@ -139,14 +99,13 @@ export const settingsSchema = z.object({
   visualizationType: z.nativeEnum(VisualizationType).optional(),
   visualizerOpacity: z.number().min(1).max(100).optional(),
   barThickness: z.number().min(1).max(MAX_BAR_THICKNESS).optional(),
-  size: z.number().min(MIN_SIDE_LENGTH).max(MAX_SIDE_LENGTH),
+  width: z.number().min(MIN_SIDE_LENGTH).max(MAX_SIDE_LENGTH).optional(),
+  height: z.number().min(MIN_SIDE_LENGTH).max(MAX_SIDE_LENGTH).optional(),
+  isAlwaysSquare: z.boolean().optional(),
+  isEdgeHazeEnabled: z.boolean().optional(),
+  edgeHaze: z.number().min(0).max(MAX_EDGE_HAZE).optional(),
   volumeIncrement: z.number().min(1).max(100).optional(),
   skipSongDelay: z.number().min(MIN_SKIP_SONG_DELAY).max(MAX_SKIP_SONG_DELAY).optional(),
+  maxFrameRate: z.number().min(0).optional(),
+  spotifyClientId: z.string().optional(),
 });
-
-export const getFullscreenVizBounds = (mainWindowBounds: Rectangle, screen: Screen, screenId: number): Rectangle => {
-  const displays = screen.getAllDisplays();
-  const currentDisplay = screen.getDisplayMatching(mainWindowBounds);
-  const fullscreenVizBounds = screenId < displays.length ? displays[screenId].bounds : currentDisplay.bounds;
-  return fullscreenVizBounds;
-};

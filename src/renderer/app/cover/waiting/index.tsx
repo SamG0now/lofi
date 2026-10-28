@@ -13,7 +13,8 @@ const WaitingWrapper = styled.div`
     color: #84bd00;
     font-size: 300%;
     opacity: 0.5;
-    animation: fader 1s infinite alternate;
+    /* breathes a few times, then rests where it ends: forever, it would keep the player redrawing while idle */
+    animation: fader 1s 7 alternate;
   }
 
   @keyframes fader {

@@ -1,26 +1,47 @@
 /* eslint-disable no-console */
-import { Display, ipcRenderer } from 'electron';
-import React, { FunctionComponent, useCallback, useEffect, useMemo, useState } from 'react';
+import { ipcRenderer, IpcRendererEvent } from 'electron';
+import { omit } from 'lodash';
+import React, { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 
-import { IpcMessage, WindowName } from '../../constants';
-import { AuthData, refreshAccessToken, setTokenRetrievedCallback } from '../../main/auth';
+import { IpcMessage, MAX_CORNER_RADIUS, WindowName } from '../../constants';
+import {
+  AuthData,
+  refreshAccessToken,
+  setClientId,
+  setTokenRetrievedCallback,
+  stopTokenRefresh,
+} from '../../main/auth';
+import { CIRCLE_LOOKS, CIRCLE_MIN_HAZE, resolveDesign } from '../../models/player-design';
 import { DEFAULT_SETTINGS, Settings, VisualizationType } from '../../models/settings';
 import { visualizations } from '../../visualizations';
+import { setMaxFrameRate } from '../../visualizations/frame-pacing';
 import { AccountType, SpotifyApiInstance } from '../api/spotify-api';
 import { WindowPortal } from '../components';
 import { useCurrentlyPlaying } from '../contexts/currently-playing.context';
 import { useSettings } from '../contexts/settings.context';
-import { DisplayData } from '../models';
+import { useWindowSize } from '../hooks/use-window-size';
+import { Size } from '../models';
 import { CurrentlyPlayingActions } from '../reducers/currently-playing.reducer';
 import { SettingsActionType } from '../reducers/settings.reducer';
 import { About } from '../windows/about';
-import { FullscreenVisualizer } from '../windows/fullscreen-visualizer';
+import { Onboarding } from '../windows/onboarding';
 import { SettingsWindow } from '../windows/settings';
 import { Cover } from './cover';
+import { flatText } from './cover/layout';
+import { getEdgeStyles } from './edge-haze';
 import { Welcome } from './welcome';
 
 const LEFT_MOUSE_BUTTON = 0;
+// managed outside of the settings window, saving it never overwrites them, unless the player was resized there
+const SETTINGS_KEPT_ON_SAVE: (keyof Settings)[] = ['accessToken', 'refreshToken', 'x', 'y', 'width', 'height'];
+const SIZE_SETTINGS: (keyof Settings)[] = ['width', 'height'];
+const Haze = styled.div`
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+`;
 
 const VisibleUi = styled.div`
   height: 100%;
@@ -29,16 +50,14 @@ const VisibleUi = styled.div`
   position: relative;
 
   &:hover {
-    .cover {
-      filter: blur(0.125rem);
-      transform: scale(1.1);
-    }
-
-    .bar,
     .controls,
     .menu {
       transition: 0.1s;
       opacity: 1;
+    }
+
+    .bar {
+      opacity: 0;
     }
 
     .welcome-content {
@@ -67,23 +86,39 @@ const VisibleUi = styled.div`
   .left {
     left: 0;
   }
+
+  ${flatText}
 `;
 
 export const App: FunctionComponent = () => {
   const [shouldShowAbout, setShouldShowAbout] = useState(false);
   const [shouldShowSettings, setShouldShowSettings] = useState(false);
-  const [shouldShowFullscreenViz, setShouldShowFullscreenViz] = useState(false);
+  const [shouldShowOnboarding, setShouldShowOnboarding] = useState(false);
   const [message, setMessage] = useState('');
-  const [displays, setDisplays] = useState<DisplayData[]>([]);
 
   const { state, dispatch } = useSettings();
+  // the setup guide opens on the first start, and after a factory reset which starts Lofi again
+  const isOnboardedOnStart = useRef(state.isOnboarded);
   const { state: currentlyPlaying, dispatch: currentlyPlayingDispatch } = useCurrentlyPlaying();
-  const { accessToken, refreshToken, visualizationId, visualizationType } = state || DEFAULT_SETTINGS;
-  const { cornerRadius } = useMemo(() => state, [state]);
+  const { accessToken, refreshToken, spotifyClientId, visualizationId, visualizationType, maxFrameRate } =
+    state || DEFAULT_SETTINGS;
+  const { cornerRadius, edgeHaze = 0, isEdgeHazeEnabled = false } = useMemo(() => state, [state]);
+  const windowSize = useWindowSize();
+  // A song in NCS's circle takes over the player: it's round whatever its corners, with nothing but the circle's
+  // light around it fading into the desktop. Without a song, the player stays as it is.
+  const lookDesign = useMemo(() => resolveDesign(state.design, state.customDesign), [state.customDesign, state.design]);
+  const isCircle = !!accessToken && !!currentlyPlaying.id && CIRCLE_LOOKS.includes(lookDesign.look);
+  const { windowStyle, hazeLayers } = useMemo(() => {
+    const haze = isEdgeHazeEnabled ? edgeHaze : 0;
+    return isCircle
+      ? getEdgeStyles(windowSize, MAX_CORNER_RADIUS, Math.max(haze, CIRCLE_MIN_HAZE))
+      : getEdgeStyles(windowSize, cornerRadius, haze);
+  }, [cornerRadius, edgeHaze, isCircle, isEdgeHazeEnabled, windowSize]);
 
   const updateTokens = useCallback(
     async (data: AuthData) => {
       if (!data || !data.access_token || !data.refresh_token) {
+        stopTokenRefresh();
         dispatch({ type: SettingsActionType.ResetTokens });
       } else {
         dispatch({ type: SettingsActionType.SetTokens, payload: data });
@@ -99,6 +134,7 @@ export const App: FunctionComponent = () => {
 
           console.log(`User '${userProfile.name}' successfully authenticated.`);
         } else {
+          currentlyPlayingDispatch({ type: CurrentlyPlayingActions.SetUserProfile, payload: null });
           console.error('User not authenticated.');
         }
       } catch (error) {
@@ -109,7 +145,7 @@ export const App: FunctionComponent = () => {
   );
 
   useEffect(() => {
-    if (currentlyPlaying.userProfile?.accountType !== AccountType.Premium && state.showFreemiumWarning) {
+    if (currentlyPlaying.userProfile?.accountType === AccountType.Free && state.showFreemiumWarning) {
       const playbackDisabledMessage = 'Account is not premium, playback controls disabled.';
       console.warn(playbackDisabledMessage);
       setMessage(playbackDisabledMessage);
@@ -123,11 +159,15 @@ export const App: FunctionComponent = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // the previews in the settings window keep to it too, they're drawn from here
   useEffect(() => {
-    if (visualizationType === VisualizationType.Big) {
-      setShouldShowFullscreenViz(true);
-    }
-  }, [shouldShowFullscreenViz, visualizationType]);
+    setMaxFrameRate(maxFrameRate ?? DEFAULT_SETTINGS.maxFrameRate);
+  }, [maxFrameRate]);
+
+  // Must run before the initial token refresh below, which needs the client ID
+  useEffect(() => {
+    setClientId(spotifyClientId);
+  }, [spotifyClientId]);
 
   const handleAuth = useCallback(async () => {
     try {
@@ -143,15 +183,22 @@ export const App: FunctionComponent = () => {
 
   useEffect(() => {
     ipcRenderer.on(IpcMessage.ShowAbout, () => setShouldShowAbout(true));
-    ipcRenderer.on(IpcMessage.ShowFullscreenVizualizer, () => setShouldShowFullscreenViz(true));
     ipcRenderer.on(IpcMessage.ShowSettings, () => setShouldShowSettings(true));
+    ipcRenderer.on(IpcMessage.ShowOnboarding, () => {
+      // saving the settings would undo what's picked in the guide
+      setShouldShowSettings(false);
+      setShouldShowOnboarding(true);
+    });
 
-    ipcRenderer.on(IpcMessage.WindowReady, async (_, { displays: displayData }: { displays: Display[] }) => {
+    ipcRenderer.on(IpcMessage.WindowReady, async () => {
+      // once the player is in place, for the guide to open over it
+      if (!isOnboardedOnStart.current) {
+        setShouldShowOnboarding(true);
+      }
+
       let animationId = 0;
       let mouseX = 0;
       let mouseY = 0;
-
-      setDisplays(() => displayData.map(({ label, bounds: { height, width } }) => ({ label, height, width })));
 
       const moveWindow = (): void => {
         ipcRenderer.send(IpcMessage.WindowMoving, { mouseX, mouseY });
@@ -188,24 +235,17 @@ export const App: FunctionComponent = () => {
       document.getElementById('app-body').addEventListener('mousedown', onMouseDown);
     });
 
-    ipcRenderer.on(IpcMessage.WindowMoved, (_: Event, data: { x: number; y: number }) => {
+    ipcRenderer.on(IpcMessage.WindowMoved, (_: IpcRendererEvent, data: { x: number; y: number }) => {
       dispatch({
         type: SettingsActionType.SetWindowPos,
         payload: data,
       });
     });
 
-    ipcRenderer.on(IpcMessage.WindowResized, (_: Event, size: number) => {
+    ipcRenderer.on(IpcMessage.WindowResized, (_: IpcRendererEvent, size: Size) => {
       dispatch({
-        type: SettingsActionType.SetSize,
+        type: SettingsActionType.SetWindowSize,
         payload: size,
-      });
-    });
-
-    ipcRenderer.on(IpcMessage.SideChanged, (_: Event, { isOnLeft }: { isOnLeft: boolean }) => {
-      dispatch({
-        type: SettingsActionType.SetIsOnLeft,
-        payload: isOnLeft,
       });
     });
   }, [dispatch]);
@@ -215,47 +255,43 @@ export const App: FunctionComponent = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The settings window may stay open for a while: the login and the player's bounds it holds can be outdated
   const handleSettingsSave = useCallback(
-    (data?: Settings) => {
+    (data: Settings, isResized: boolean) => {
+      const kept = isResized
+        ? SETTINGS_KEPT_ON_SAVE.filter((key) => !SIZE_SETTINGS.includes(key))
+        : SETTINGS_KEPT_ON_SAVE;
+      const settings = { ...state, ...omit(data, kept) };
       dispatch({
         type: SettingsActionType.UpdateSettings,
-        payload: data,
+        payload: settings,
       });
-      ipcRenderer.send(IpcMessage.SettingsChanged, data);
+      ipcRenderer.send(IpcMessage.SettingsChanged, settings);
+
+      // Tokens are tied to the Spotify app that issued them
+      if (settings.spotifyClientId !== spotifyClientId) {
+        updateTokens(null);
+      }
     },
-    [dispatch]
+    [dispatch, spotifyClientId, state, updateTokens]
   );
 
+  const handleOnboardingSave = useCallback(
+    (values: Partial<Settings>, isResized = false) => handleSettingsSave({ ...state, ...values }, isResized),
+    [handleSettingsSave, state]
+  );
+
+  // Finished or put away, it only opens again when asked for
+  const closeOnboarding = useCallback(() => {
+    setShouldShowOnboarding(false);
+    dispatch({ type: SettingsActionType.SetOnboarded });
+  }, [dispatch]);
+
   const handleVisualizationChange = useCallback(() => {
-    switch (visualizationType) {
-      case VisualizationType.None: {
-        dispatch({
-          type: SettingsActionType.SetVisualizationType,
-          payload: VisualizationType.Small,
-        });
-        break;
-      }
-
-      case VisualizationType.Small: {
-        ipcRenderer.send(IpcMessage.ShowFullscreenVizualizer);
-
-        dispatch({
-          type: SettingsActionType.SetVisualizationType,
-          payload: VisualizationType.Big,
-        });
-        break;
-      }
-
-      case VisualizationType.Big:
-      default: {
-        setShouldShowFullscreenViz(false);
-        dispatch({
-          type: SettingsActionType.SetVisualizationType,
-          payload: VisualizationType.None,
-        });
-        break;
-      }
-    }
+    dispatch({
+      type: SettingsActionType.SetVisualizationType,
+      payload: visualizationType === VisualizationType.None ? VisualizationType.Small : VisualizationType.None,
+    });
   }, [dispatch, visualizationType]);
 
   const handleVisualizationCycle = useCallback(
@@ -277,13 +313,12 @@ export const App: FunctionComponent = () => {
   return (
     <VisibleUi
       id="visible-ui"
-      className="click-on"
-      style={cornerRadius ? { borderRadius: `${cornerRadius}%`, overflow: 'hidden' } : {}}>
+      className={state.isTextShadowEnabled === false ? 'click-on no-text-shadow' : 'click-on'}
+      style={isCircle ? { ...windowStyle, background: 'transparent' } : windowStyle}>
       {shouldShowSettings && (
         <WindowPortal onUnload={() => setShouldShowSettings(false)} name={WindowName.Settings}>
           <SettingsWindow
             initialValues={state}
-            displays={displays}
             onSave={handleSettingsSave}
             onClose={() => setShouldShowSettings(false)}
             onLogout={() => updateTokens(null)}
@@ -297,12 +332,14 @@ export const App: FunctionComponent = () => {
         </WindowPortal>
       )}
 
-      {shouldShowFullscreenViz && (
-        <WindowPortal
-          onUnload={() => setShouldShowFullscreenViz(false)}
-          name={WindowName.FullscreenViz}
-          features={{ isFullscreen: true }}>
-          <FullscreenVisualizer onClose={() => setShouldShowFullscreenViz(false)} />
+      {shouldShowOnboarding && (
+        <WindowPortal onUnload={closeOnboarding} name={WindowName.Onboarding}>
+          <Onboarding
+            initialValues={state}
+            onSave={handleOnboardingSave}
+            onLogout={() => updateTokens(null)}
+            onClose={closeOnboarding}
+          />
         </WindowPortal>
       )}
 
@@ -316,6 +353,12 @@ export const App: FunctionComponent = () => {
       ) : (
         <Welcome />
       )}
+      {/* around the circle there's only the desktop, which the haze would mist over */}
+      {!isCircle &&
+        hazeLayers.map((style, index) => (
+          // eslint-disable-next-line react/no-array-index-key
+          <Haze key={index} style={style} />
+        ))}
     </VisibleUi>
   );
 };

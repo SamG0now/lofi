@@ -1,72 +1,41 @@
-import { VisualizeConfiguration } from './models';
-import { VisualizationProgram, visualize } from './visualization';
+import { Visualization } from './models';
 
-export const rainbowRoad = ({ canvas, timeFactor = 1000, peakFactor = 1 }: VisualizeConfiguration): void => {
-  const program: VisualizationProgram = {
-    fragmentShaderSource: `
-    // - glslfan.com 
-    //        <meta name="description" content="glslfan is a platform that can broadcast the live coding of GLSL shaders.">
-    //        <meta name="keywords" content="GLSL,shader,WebGL,live coding,bloadcast">
-    
-    precision mediump float;
-    uniform vec2  resolution;
-    uniform float  volume;
-    uniform float time;
-    
-    const float PI = 3.1415926;
-    
-    vec3 rgb2hsv(vec3 hsv){
-        vec4 t = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-        vec3 p = abs(fract(vec3(hsv.x) + t.xyz) * 6.0 - vec3(t.w));
-        return hsv.z * mix(vec3(t.x), clamp(p - vec3(t.x), 0.0, 1.0), hsv.y);
+// Neon lanes in every color racing towards the horizon, faster and brighter with the music
+export const rainbowRoad: Visualization = {
+  name: 'Rainbow Road',
+  shader: `
+    const float HORIZON = 0.12;
+    const float CAMERA_HEIGHT = 0.8;
+    const float LANE_WIDTH = 0.55;
+
+    vec4 visualize() {
+      // the sky lets the cover through, the road is darker
+      vec4 color = vec4(vec3(0.03, 0.0, 0.08) * 0.45, 0.45);
+      float belowHorizon = HORIZON - p.y;
+
+      if (belowHorizon > 0.0) {
+        float depth = CAMERA_HEIGHT / belowHorizon;
+        // the road bends left and right with the bass
+        float x = p.x * depth + sin(depth * 0.25 + u_flow * 0.6) * (0.4 + 1.2 * u_bass);
+        float lane = floor(x / LANE_WIDTH + 0.5);
+        float d = abs(x - lane * LANE_WIDTH);
+        // a pixel covers more of the road the farther away it is
+        float pixel = depth * px;
+        float fog = exp(-depth * 0.09);
+
+        vec3 tint = hsv(lane * 0.11 + u_time * 0.03, 0.75, 1.0);
+        float lineWidth = 0.012 + pixel;
+        float lines = smoothstep(lineWidth + pixel, lineWidth - pixel, d);
+        float dashes = step(0.5, fract(depth * 0.6 - u_flow * 2.0)) * smoothstep(0.08, 0.0, d);
+        float brightness = 0.55 + 0.6 * u_level + 0.5 * u_beat;
+        color = vec4(vec3(0.03, 0.0, 0.07) * 0.8, 0.8);
+        color.rgb += tint * (lines + 0.3 * glow(d, 0.06 + 0.1 * u_mid) + 0.25 * dashes) * fog * brightness;
+      }
+
+      // the horizon lights up with the bass
+      float horizonGlow = glow(abs(p.y - HORIZON), 0.02 + 0.03 * u_bass);
+      color.rgb += hsv(uv.x * 0.8 + u_time * 0.03, 0.6, 1.0) * horizonGlow * (0.35 + 0.65 * u_bass);
+      return color;
     }
-    
-    float dist(vec3 pos)
-    {
-        pos.x += sin(pos.z * 0.2+ time * 10.0);
-        pos.x = mod(pos.x, 4.0) - 2.0;
-        return length(pos.yx) - 0.01;
-    }
-    
-    vec3 calcNormal(vec3 pos)
-    {
-        vec2 ep = vec2(0.001, 0.0);
-        return normalize(vec3(
-            dist(pos + ep.xyy) - dist(pos - ep.xyy),
-            dist(pos + ep.yxy) - dist(pos - ep.yxy),
-            dist(pos + ep.yyx) - dist(pos - ep.yyx)
-        ));
-    }
-    
-    vec3 calcColor(vec3 pos)
-    {
-        return rgb2hsv(vec3(pos.x * 0.2, 1, 1));
-    }
-    
-    void main(){
-        vec2 p = (gl_FragCoord.xy * 2.0 - resolution) / resolution.y;
-        
-        vec3 pos = vec3(0, 5.0, -5);
-        vec3 dir = normalize(vec3(p, 1.0));
-        
-        vec3 color = vec3(0, 0, 0) * length(p.xy) * sin(time * 10.0);
-        
-        float depth = 0.0;
-        for (int i = 0; i < 64; ++i)
-        {
-            float d = dist(pos);
-            pos += dir * d * 0.5;
-            color += .02 * (0.1 + volume) / d * calcColor(pos);
-            
-            depth = float(i);
-        }
-        // mix(color, vec3(1.0, 1.0, 1.0), depth / 64.0)
-        
-        gl_FragColor = vec4(color, 1.0);
-    }
-    `,
-    timeFactor,
-    peakFactor,
-  };
-  visualize(canvas, program);
+  `,
 };

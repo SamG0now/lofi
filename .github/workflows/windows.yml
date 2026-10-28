@@ -2,15 +2,21 @@ name: windows-installer
 on: [workflow_dispatch, push]
 jobs:
   build:
-    # node-gyp 10 can't detect VS 2026 on windows-latest
+    # node-gyp can't detect VS 2026 on windows-latest
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
-      - run: yarn install
-      - run: yarn dist --win --publish never
+          node-version: 24
+          cache: pnpm
+      # install runs node-gyp, which builds the N-API native modules with MSVC
+      - run: pnpm install
+      - run: pnpm run production
+      - run: pnpm exec electron-builder --win nsis --x64 --publish never -c.win.icon=icon.ico "-c.asarUnpack=**/*.node"
       - uses: actions/upload-artifact@v4
         with:
           name: lofi-windows-setup

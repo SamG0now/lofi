@@ -1,10 +1,17 @@
 import { SPOTIFY_API_URL as API_URL } from '../../constants';
 import { AuthData, refreshAccessToken } from '../../main/auth';
+import { SpotifyApiError, SpotifyErrorResponse } from './spotify-api-error';
+
+export { SpotifyApiError };
 
 export enum AccountType {
   Free = 'free',
   Premium = 'premium',
+  // Spotify stopped sharing the subscription type with Development Mode apps (February 2026)
+  Unknown = 'unknown',
 }
+
+export const PREMIUM_REQUIRED_REASON = 'PREMIUM_REQUIRED';
 
 interface SpotifyImage {
   url: string;
@@ -12,25 +19,31 @@ interface SpotifyImage {
 
 interface SpotifyAccount {
   id: string;
-  product: string;
-  email: string;
+  product?: string;
+  email?: string;
   display_name: string;
   images: SpotifyImage[];
 }
 
 export interface SpotifyUserProfile {
   id: string;
-  product: string;
-  email: string;
+  email?: string;
   name: string;
   avatar: string;
   accountType: AccountType;
+}
+
+export enum RepeatState {
+  Off = 'off',
+  Context = 'context',
+  Track = 'track',
 }
 
 export interface SpotifyCurrentlyPlaying {
   device: {
     volume_percent: number;
   };
+  repeat_state: RepeatState;
   progress_ms: number;
   item: {
     album: {
@@ -49,6 +62,9 @@ export interface SpotifyCurrentlyPlaying {
       }
     ];
     description: string;
+    show?: {
+      name: string;
+    };
     id: string;
     images: [
       {
@@ -60,9 +76,25 @@ export interface SpotifyCurrentlyPlaying {
     duration_ms: number;
     name: string;
     type: string;
+    uri: string;
   };
   is_playing: boolean;
 }
+
+const getAccountType = (product?: string): AccountType => {
+  switch (product) {
+    case AccountType.Premium:
+      return AccountType.Premium;
+
+    case undefined:
+    case null:
+      return AccountType.Unknown;
+
+    // 'free' and the legacy 'open'
+    default:
+      return AccountType.Free;
+  }
+};
 
 class SpotifyApi {
   private isThrottled: boolean;
@@ -86,29 +118,24 @@ class SpotifyApi {
     });
 
     return {
-      ...userProfile,
-      accountType: userProfile?.product as AccountType,
+      id: userProfile?.id,
+      email: userProfile?.email,
+      accountType: getAccountType(userProfile?.product),
       name: userProfile?.display_name,
       avatar: userProfile?.images?.length > 0 ? userProfile?.images[0].url : '',
     };
   }
 
   async getCurrentlyPlaying(): Promise<SpotifyCurrentlyPlaying> {
-    return this.fetch<SpotifyCurrentlyPlaying>('/me/player?type=episode,track', {
+    return this.fetch<SpotifyCurrentlyPlaying>('/me/player?additional_types=track,episode', {
       method: 'GET',
     });
   }
 
   async play(pause: boolean): Promise<void> {
-    if (pause) {
-      this.fetch('/me/player/pause', {
-        method: 'PUT',
-      });
-    } else {
-      await this.fetch('/me/player/play', {
-        method: 'PUT',
-      });
-    }
+    await this.fetch(`/me/player/${pause ? 'pause' : 'play'}`, {
+      method: 'PUT',
+    });
   }
 
   async skip(isForward: boolean): Promise<void> {
@@ -117,15 +144,16 @@ class SpotifyApi {
     });
   }
 
-  async like(isLiked: boolean, trackId: string): Promise<void> {
+  // The per-type /me/tracks endpoints were replaced by /me/library, which takes URIs instead of IDs
+  async like(isLiked: boolean, uri: string): Promise<void> {
     const verb = isLiked ? 'DELETE' : 'PUT';
-    await this.fetch(`/me/tracks?ids=${trackId}`, {
+    await this.fetch(`/me/library?uris=${encodeURIComponent(uri)}`, {
       method: verb,
     });
   }
 
-  async isTrackLiked(trackId: string): Promise<boolean> {
-    const likedResponse: Array<boolean> = await this.fetch(`/me/tracks/contains?ids=${trackId}`, {
+  async isTrackLiked(uri: string): Promise<boolean> {
+    const likedResponse: Array<boolean> = await this.fetch(`/me/library/contains?uris=${encodeURIComponent(uri)}`, {
       method: 'GET',
     });
 
@@ -136,13 +164,19 @@ class SpotifyApi {
   }
 
   async seek(newProgress: number): Promise<void> {
-    await this.fetch(`/me/player/seek?position_ms=${newProgress}`, {
+    await this.fetch(`/me/player/seek?position_ms=${Math.max(0, Math.round(newProgress))}`, {
       method: 'PUT',
     });
   }
 
   async setVolume(newVolume: number): Promise<void> {
     await this.fetch(`/me/player/volume?volume_percent=${newVolume}`, {
+      method: 'PUT',
+    });
+  }
+
+  async setRepeat(repeatState: RepeatState): Promise<void> {
+    await this.fetch(`/me/player/repeat?state=${repeatState}`, {
       method: 'PUT',
     });
   }
@@ -168,14 +202,15 @@ class SpotifyApi {
     };
 
     const res = await fetch(API_URL + input, initWithBearer);
+    if (res.ok) {
+      // Player and library commands answer with an empty body (204, or 200 without content),
+      // or with a plain-text ID (next/previous), so only JSON bodies are parsed
+      const body = await res.text();
+      const isJson = res.headers.get('content-type')?.includes('json');
+      return body && isJson ? JSON.parse(body) : null;
+    }
+
     switch (res.status) {
-      case 200: {
-        const responseLength = parseInt(res.headers.get('content-length'), 10);
-        return responseLength > 0 ? res.json() : null;
-      }
-      case 204: {
-        return null;
-      }
       case 401: {
         if (this.refreshToken) {
           await refreshAccessToken(this.refreshToken);
@@ -195,8 +230,8 @@ class SpotifyApi {
       }
     }
 
-    const { error } = await res.json();
-    throw new Error(`${error.status}: ${error.message}`);
+    const { error } = await res.json().catch((): SpotifyErrorResponse => ({}));
+    throw new SpotifyApiError(res.status, error?.message || res.statusText, error?.reason);
   }
 }
 

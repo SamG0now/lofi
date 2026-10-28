@@ -74,3 +74,8 @@ package
 
 # generated version file
 version.generated.ts
+# local Windows cross-build output, release installers, Claude settings
+dist-win
+build-win
+/1.0 release
+.claude/

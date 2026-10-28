@@ -1,10 +1,8 @@
 import { ipcRenderer } from 'electron';
-import { noop } from 'lodash';
-import React, { FunctionComponent, useCallback, useMemo } from 'react';
+import React, { FunctionComponent, useCallback } from 'react';
 import styled from 'styled-components';
 
-import { IpcMessage, WINDOWS } from '../../../../constants';
-import { VisualizationType } from '../../../../models/settings';
+import { IpcMessage } from '../../../../constants';
 import { CloseButton } from '../../../components';
 
 const MenuList = styled.ul`
@@ -12,7 +10,8 @@ const MenuList = styled.ul`
   z-index: 3;
   list-style-type: none;
   margin: 0;
-  padding: 4px;
+  /* keeps clear of the window's rounded corners */
+  padding: calc(4px + var(--corner-inset-y, 0px)) calc(4px + var(--corner-inset-x, 0px));
   overflow: hidden;
   font-size: 12px;
   opacity: 0;
@@ -21,7 +20,7 @@ const MenuList = styled.ul`
   -webkit-transition: opacity 0.25s ease-in-out;
   position: absolute;
   left: 0;
-  width: calc(100% - 8px);
+  width: calc(100% - 8px - 2 * var(--corner-inset-x, 0px));
 
   .bottom {
     bottom: 0;
@@ -93,33 +92,8 @@ const MenuList = styled.ul`
   }
 `;
 
-interface Props {
-  isWelcome?: boolean;
-  visualizationType?: VisualizationType;
-  onVisualizationChange?: () => void;
-  onVisualizationCycle?: (isPrevious: boolean) => void;
-}
-
-const Menu: FunctionComponent<Props> = ({
-  isWelcome = false,
-  visualizationType = VisualizationType.None,
-  onVisualizationChange = noop,
-  onVisualizationCycle = noop,
-}) => {
-  const visIcon = useMemo((): string => {
-    switch (visualizationType) {
-      case VisualizationType.Small:
-        return 'fa-expand-arrows-alt';
-
-      case VisualizationType.Big:
-        return 'fa-compress-arrows-alt';
-
-      case VisualizationType.None:
-      default:
-        return 'fa-expand';
-    }
-  }, [visualizationType]);
-
+// Shown while logged out or when nothing plays, the player controls replace it otherwise
+const Menu: FunctionComponent = () => {
   const handleCloseClick = useCallback(() => {
     ipcRenderer.send(IpcMessage.CloseApp);
   }, []);
@@ -151,23 +125,6 @@ const Menu: FunctionComponent<Props> = ({
         </li>
       </MenuList>
       <MenuList className="menu bottom draggable">
-        {!isWelcome && WINDOWS && (
-          <li className="draggable">
-            {visualizationType !== VisualizationType.None && (
-              <button type="button" onClick={() => onVisualizationCycle(true)} className="unstyled-button vis">
-                <i className="fa fa-caret-left" />
-              </button>
-            )}
-            <button type="button" onClick={onVisualizationChange} className="unstyled-button vis vis-change">
-              <i className={`fa ${visIcon}`} />
-            </button>
-            {visualizationType !== VisualizationType.None && (
-              <button type="button" onClick={() => onVisualizationCycle(false)} className="unstyled-button vis">
-                <i className="fa fa-caret-right" />
-              </button>
-            )}
-          </li>
-        )}
         <li className="pull-right draggable">
           <button type="button" onClick={handleAboutClick} className="unstyled-button help">
             <i className="fa-solid fa-circle-question" />

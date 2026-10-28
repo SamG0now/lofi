@@ -19,7 +19,7 @@ Lofi is a mini Spotify player with visualizations. It is _not_ a replacement for
 
 ## Design goals
 
-- A small, `1:1` aspect ratio player depicting album art
+- A small player depicting album art, resizable to any shape, with controls on hover
 - An always-on-top "widget-like" app
 - Minimalist (no extraneous controls)
 - Multiple-screen capable
@@ -27,42 +27,51 @@ Lofi is a mini Spotify player with visualizations. It is _not_ a replacement for
 - Visualization-ready (WebGL)
 - ≤ 100MB memory footprint
 
+# Connecting to Spotify
+
+Spotify no longer lets apps share a client ID, so Lofi connects through a Spotify app that you register yourself (it's free, but Spotify requires the app owner to have Premium):
+
+1. Create an app on the [Spotify developer dashboard](https://developer.spotify.com/dashboard) and select **Web API**.
+2. Add `http://127.0.0.1:41419` as a redirect URI, exactly as written (no trailing slash, and `127.0.0.1` rather than `localhost`), then **Save** the app.
+3. Start Lofi, open **Settings → Account**, paste the app's client ID and click **Log in with Spotify**.
+
+`redirect_uri: Not matching configuration` means the redirect URI saved on the app doesn't exactly match the one above.
+
 # Building
 
-To build, you'll need `node-gyp`, a compatible Python version (2.x), and your operating system's SDK (Microsoft Build Tools or Xcode).
+You'll need Node.js 22 or newer, [pnpm](https://pnpm.io), Python 3 and a C++ compiler (Microsoft Build Tools on Windows, Xcode on macOS). On Linux, the visualizations also need the PulseAudio client headers, which work with PipeWire too:
 
-First, you'll need to run:
+| Distribution  | Package                      |
+| ------------- | ---------------------------- |
+| Arch          | `libpulse`                   |
+| Debian/Ubuntu | `libpulse-dev`               |
+| Fedora        | `pulseaudio-libs-devel`      |
 
-```
-$ yarn install
-```
-
-If you have more than one Python installation on your system, you can prevent the build from failing by editing the `package.json` file in the root directory.
-
-Append the following on the `"build": ...` line:
+Then install the dependencies, which also builds the native modules:
 
 ```
---python path/to/python27
-```
-
-Now you can run `yarn install` again.
-
-# Distribution
-
-To **create a setup file**, run `yarn run dist`. The output will be located in `./dist`.
-
-```
-$ yarn run dist
+$ pnpm install
 ```
 
 # Development
 
-To **develop**, open up a Terminal and type:
+```
+$ pnpm run development
+$ pnpm start
+```
+
+# Distribution
+
+To **create a setup file**, run `pnpm run dist`. The output will be located in `./dist`. On Linux this builds an AppImage, a `.deb` and a pacman package; the latter two need `libxcrypt-compat` on Arch-based systems.
 
 ```
-$ yarn run development
-$ yarn run start
+$ pnpm run dist
 ```
+
+# Linux notes
+
+- Lofi positions its own windows and stays on top, which native Wayland windows aren't allowed to do, so it runs through XWayland. The desktop entry passes `--ozone-platform=x11`, and Lofi relaunches itself with it when started any other way.
+- Visualizations react to whatever plays on the default output device, captured through PulseAudio or PipeWire only while a visualization is shown.
 
 # Bugs, issues, and contributing
 
