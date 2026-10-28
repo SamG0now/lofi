@@ -16,7 +16,9 @@ jobs:
       # install runs node-gyp, which builds the N-API native modules with MSVC
       - run: pnpm install
       - run: pnpm run production
+      # bash: PowerShell splits the -c.key=value flags
       - run: pnpm exec electron-builder --win nsis --x64 --publish never -c.win.icon=icon.ico "-c.asarUnpack=**/*.node"
+        shell: bash
       - uses: actions/upload-artifact@v4
         with:
           name: lofi-windows-setup
