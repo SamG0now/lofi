@@ -1,5 +1,11 @@
 name: windows-installer
-on: [workflow_dispatch, push]
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      client_id:
+        description: Spotify Client ID to ship as the default (optional)
+        required: false
 jobs:
   build:
     # node-gyp can't detect VS 2026 on windows-latest
@@ -15,6 +21,15 @@ jobs:
           cache: pnpm
       # install runs node-gyp, which builds the N-API native modules with MSVC
       - run: pnpm install
+      - name: Ship a default Spotify Client ID
+        if: inputs.client_id
+        env:
+          CLIENT_ID: ${{ inputs.client_id }}
+        shell: bash
+        run: |
+          [[ "$CLIENT_ID" =~ ^[0-9a-zA-Z]{32}$ ]] || { echo "Not a client ID"; exit 1; }
+          sed -i "s/spotifyClientId: ''/spotifyClientId: '$CLIENT_ID'/" src/models/settings.ts
+          grep -q "spotifyClientId: '$CLIENT_ID'" src/models/settings.ts
       - run: pnpm run production
       # bash: PowerShell splits the -c.key=value flags
       - run: pnpm exec electron-builder --win nsis --x64 --publish never -c.win.icon=icon.ico "-c.asarUnpack=**/*.node"
