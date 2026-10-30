@@ -6,7 +6,7 @@
       "cflags_cc!": [ "-fno-exceptions" ],
       "sources": [ "./src/native/volume/volume.cc" ],
       "include_dirs": [
-        "<!@(node -p \"require('node-addon-api').include_dir\")"
+        "node_modules/node-addon-api"
       ],
       'defines': [ 'NAPI_DISABLE_CPP_EXCEPTIONS' ],
       "conditions": [
@@ -69,7 +69,7 @@
       "cflags_cc!": [ "-fno-exceptions" ],
       "sources": [ "./src/native/black-magic/black-magic.cc" ],
       "include_dirs": [
-        "<!@(node -p \"require('node-addon-api').include_dir\")"
+        "node_modules/node-addon-api"
       ],
       'defines': [ 'NAPI_DISABLE_CPP_EXCEPTIONS' ],
       "conditions": [
