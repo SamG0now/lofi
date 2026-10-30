@@ -118,7 +118,9 @@ export const AccountSettings: FunctionComponent<Props> = ({ onLogin, onLogout })
             Spotify developer dashboard
           </Anchor>{' '}
           and select <b>Web API</b>. Add the redirect URI below to it exactly as shown, save it, then paste its client
-          ID here.
+          ID here. The account that owns the app needs Premium. Without Premium, ask someone who has it to add you under{' '}
+          <b>User Management</b> in their app and use their client ID. You&apos;ll see what&apos;s playing, without the
+          controls.
         </Text>
         <SettingRow label="Redirect URI">
           <TextInput

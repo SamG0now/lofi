@@ -230,8 +230,13 @@ class SpotifyApi {
       }
     }
 
-    const { error } = await res.json().catch((): SpotifyErrorResponse => ({}));
-    throw new SpotifyApiError(res.status, error?.message || res.statusText, error?.reason);
+    const { error } = await res
+      .clone()
+      .json()
+      .catch((): SpotifyErrorResponse => ({}));
+    // Some errors, like an account the Spotify app doesn't allow, come back as plain text
+    const text = error ? '' : await res.text().catch(() => '');
+    throw new SpotifyApiError(res.status, error?.message || text.trim() || res.statusText, error?.reason);
   }
 }
 

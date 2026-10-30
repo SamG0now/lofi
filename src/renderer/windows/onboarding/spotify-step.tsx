@@ -185,6 +185,11 @@ export const SpotifyStep: FunctionComponent<Props> = ({ onLogin, onLogout }) => 
         subtitle="Spotify lets Lofi in through an app of your own. It's free and takes a minute, but the account that makes it needs Premium."
       />
 
+      <Note icon="fa-solid fa-user-group">
+        No Premium? Ask someone with Premium to add your Spotify name and email under <b>User Management</b> in their
+        app, then use their Client ID below. You&apos;ll see what&apos;s playing, without the controls.
+      </Note>
+
       <ol className={`${guide.card} ${classes.instructions}`}>
         <li className={classes.instruction}>
           <div className={classes.row} style={{ alignItems: 'center' }}>
