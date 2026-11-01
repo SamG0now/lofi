@@ -13,6 +13,8 @@ export enum AccountType {
 
 export const PREMIUM_REQUIRED_REASON = 'PREMIUM_REQUIRED';
 
+const NO_ACTIVE_DEVICE_REASON = 'NO_ACTIVE_DEVICE';
+
 interface SpotifyImage {
   url: string;
 }
@@ -133,15 +135,11 @@ class SpotifyApi {
   }
 
   async play(pause: boolean): Promise<void> {
-    await this.fetch(`/me/player/${pause ? 'pause' : 'play'}`, {
-      method: 'PUT',
-    });
+    await this.command(`/me/player/${pause ? 'pause' : 'play'}`, 'PUT');
   }
 
   async skip(isForward: boolean): Promise<void> {
-    await this.fetch(`/me/player/${isForward ? 'next' : 'previous'}`, {
-      method: 'POST',
-    });
+    await this.command(`/me/player/${isForward ? 'next' : 'previous'}`, 'POST');
   }
 
   // The per-type /me/tracks endpoints were replaced by /me/library, which takes URIs instead of IDs
@@ -164,21 +162,42 @@ class SpotifyApi {
   }
 
   async seek(newProgress: number): Promise<void> {
-    await this.fetch(`/me/player/seek?position_ms=${Math.max(0, Math.round(newProgress))}`, {
-      method: 'PUT',
-    });
+    await this.command(`/me/player/seek?position_ms=${Math.max(0, Math.round(newProgress))}`, 'PUT');
   }
 
   async setVolume(newVolume: number): Promise<void> {
-    await this.fetch(`/me/player/volume?volume_percent=${newVolume}`, {
-      method: 'PUT',
-    });
+    await this.command(`/me/player/volume?volume_percent=${newVolume}`, 'PUT');
   }
 
   async setRepeat(repeatState: RepeatState): Promise<void> {
-    await this.fetch(`/me/player/repeat?state=${repeatState}`, {
-      method: 'PUT',
-    });
+    await this.command(`/me/player/repeat?state=${repeatState}`, 'PUT');
+  }
+
+  // Spotify stops accepting commands once a device goes idle, even while it still reports the song,
+  // so wake the user's device (keeping its play/pause state) and retry once
+  private async command(path: string, method: string): Promise<void> {
+    try {
+      await this.fetch(path, { method });
+    } catch (error) {
+      if (!(error instanceof SpotifyApiError) || error.reason !== NO_ACTIVE_DEVICE_REASON) {
+        throw error;
+      }
+      const response = await this.fetch<{ devices: { id: string | null; is_active: boolean }[] }>(
+        '/me/player/devices',
+        { method: 'GET' }
+      );
+      const devices = response?.devices?.filter((device) => device.id) ?? [];
+      const device = devices.find((d) => d.is_active) ?? devices[0];
+      if (!device) {
+        throw new SpotifyApiError(404, 'No Spotify device found. Open Spotify and play something first.', error.reason);
+      }
+      await this.fetch('/me/player', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_ids: [device.id] }),
+      });
+      await this.fetch(path, { method });
+    }
   }
 
   private async fetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -197,6 +216,7 @@ class SpotifyApi {
     const initWithBearer = {
       ...init,
       headers: new Headers({
+        ...(init?.headers as Record<string, string>),
         Authorization: `Bearer ${this.accessToken}`,
       }),
     };
