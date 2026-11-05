@@ -138,7 +138,9 @@ export const App: FunctionComponent = () => {
           console.error('User not authenticated.');
         }
       } catch (error) {
+        // e.g. Spotify rejecting an account the app doesn't allow, say why instead of failing silently
         console.error(error);
+        setMessage((error as Error).message);
       }
     },
     [currentlyPlayingDispatch, dispatch]
