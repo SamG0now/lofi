@@ -88,6 +88,11 @@ export const AccountSettings: FunctionComponent<Props> = ({ onLogin, onLogout })
                     {capitalize(userProfile.accountType)}
                   </Badge>
                 )}
+                {userProfile.accountType === AccountType.Free && (
+                  <Text size="xs" color="dimmed" mt={4}>
+                    Showing what&apos;s playing. Playback controls need Spotify Premium.
+                  </Text>
+                )}
               </div>
             </Group>
             <Button variant="default" size="xs" onClick={handleLogoutClick}>

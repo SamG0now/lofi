@@ -16,7 +16,7 @@ import { CIRCLE_LOOKS, CIRCLE_MIN_HAZE, resolveDesign } from '../../models/playe
 import { DEFAULT_SETTINGS, Settings, VisualizationType } from '../../models/settings';
 import { visualizations } from '../../visualizations';
 import { setMaxFrameRate } from '../../visualizations/frame-pacing';
-import { AccountType, SpotifyApiInstance } from '../api/spotify-api';
+import { SpotifyApiInstance } from '../api/spotify-api';
 import { WindowPortal } from '../components';
 import { useCurrentlyPlaying } from '../contexts/currently-playing.context';
 import { useSettings } from '../contexts/settings.context';
@@ -145,16 +145,6 @@ export const App: FunctionComponent = () => {
     },
     [currentlyPlayingDispatch, dispatch]
   );
-
-  useEffect(() => {
-    if (currentlyPlaying.userProfile?.accountType === AccountType.Free && state.showFreemiumWarning) {
-      const playbackDisabledMessage = "Free Spotify account: showing what's playing, controls need Premium.";
-      console.warn(playbackDisabledMessage);
-      setMessage(playbackDisabledMessage);
-    } else {
-      setMessage('');
-    }
-  }, [currentlyPlaying.userProfile?.accountType, state.showFreemiumWarning]);
 
   useEffect(() => {
     setTokenRetrievedCallback(updateTokens);

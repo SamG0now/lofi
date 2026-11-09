@@ -63,7 +63,6 @@ export interface Settings {
   isAlwaysSquare: boolean;
   volumeIncrement: number;
   skipSongDelay: number;
-  showFreemiumWarning: boolean;
   cornerRadius: number;
   isEdgeHazeEnabled: boolean;
   edgeHaze: number;
@@ -129,7 +128,6 @@ export const DEFAULT_SETTINGS: Settings = {
   barColor: '#74C999',
   volumeIncrement: 5,
   skipSongDelay: 15,
-  showFreemiumWarning: true,
   cornerRadius: 13,
   isEdgeHazeEnabled: false,
   edgeHaze: 20,

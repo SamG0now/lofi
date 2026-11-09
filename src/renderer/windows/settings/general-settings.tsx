@@ -178,11 +178,6 @@ export const GeneralSettings: FunctionComponent = () => (
         step={5}
         format={(value) => `${value}s`}
       />
-      <SwitchField
-        name="showFreemiumWarning"
-        label="Free account warning"
-        description="Explain why playback controls are hidden without Spotify Premium"
-      />
     </SettingsGroup>
   </SettingsSection>
 );
