@@ -148,7 +148,7 @@ export const App: FunctionComponent = () => {
 
   useEffect(() => {
     if (currentlyPlaying.userProfile?.accountType === AccountType.Free && state.showFreemiumWarning) {
-      const playbackDisabledMessage = 'Account is not premium, playback controls disabled.';
+      const playbackDisabledMessage = "Free Spotify account: showing what's playing, controls need Premium.";
       console.warn(playbackDisabledMessage);
       setMessage(playbackDisabledMessage);
     } else {

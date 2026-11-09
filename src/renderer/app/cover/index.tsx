@@ -115,11 +115,13 @@ export const Cover: FunctionComponent<Props> = ({ settings, message, onVisualiza
   const handleError = useCallback(
     (error: Error): void => {
       console.error(error);
-      setErrorToDisplay(error.message);
 
-      // Spotify no longer tells Development Mode apps whether an account is premium, find out on first use instead
+      // Spotify no longer tells Development Mode apps whether an account is premium, find out on first use instead,
+      // and switch to view-only quietly: Spotify's 'Premium required' reads like the app refuses free accounts
       const isPremiumRequired = error instanceof SpotifyApiError && error.reason === PREMIUM_REQUIRED_REASON;
-      if (isPremiumRequired && state.userProfile && state.userProfile.accountType !== AccountType.Free) {
+      if (!isPremiumRequired) {
+        setErrorToDisplay(error.message);
+      } else if (state.userProfile && state.userProfile.accountType !== AccountType.Free) {
         dispatch({
           type: CurrentlyPlayingActions.SetUserProfile,
           payload: { ...state.userProfile, accountType: AccountType.Free },
